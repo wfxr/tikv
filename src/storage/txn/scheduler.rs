@@ -1902,6 +1902,27 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             Ok(res) => res,
         };
 
+        // Feed MVCC scan stats into the per-request tracker before any callback/early
+        // response can be triggered, so the gRPC layer can include them in
+        // `ExecDetailsV2.scan_detail_v2`.
+        let mvcc_total_versions = sched_details.stat.write.total_op_count() as u64;
+        let mvcc_processed_versions = sched_details.stat.write.processed_keys as u64;
+        let mvcc_processed_versions_size = sched_details.stat.processed_size as u64;
+        GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
+            tracker.metrics.mvcc_total_versions = tracker
+                .metrics
+                .mvcc_total_versions
+                .saturating_add(mvcc_total_versions);
+            tracker.metrics.mvcc_processed_versions = tracker
+                .metrics
+                .mvcc_processed_versions
+                .saturating_add(mvcc_processed_versions);
+            tracker.metrics.mvcc_processed_versions_size = tracker
+                .metrics
+                .mvcc_processed_versions_size
+                .saturating_add(mvcc_processed_versions_size);
+        });
+
         // TODO: remove this check when the cause of issue 18498 is located.
         if txn_types::ENABLE_DUP_KEY_DEBUG.load(Ordering::Relaxed)
             && !write_result.to_be_write.modifies.is_empty()
